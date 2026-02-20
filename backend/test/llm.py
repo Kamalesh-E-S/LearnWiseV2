@@ -134,5 +134,5 @@ def main():
 if __name__ == "__main__":
     main()
 """groq
-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
+your_groq_api_key_here
 """
