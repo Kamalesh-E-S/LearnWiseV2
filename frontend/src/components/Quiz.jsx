@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { CheckCircle, XCircle, RotateCcw, X } from 'lucide-react';
 import api from '../lib/axios';
 
 export default function Quiz({ roadmapId, node, onClose, onSuccess }) {
@@ -12,180 +13,208 @@ export default function Quiz({ roadmapId, node, onClose, onSuccess }) {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
 
-  useEffect(() => {
-    async function fetchQuiz() {
-      setLoading(true);
-      try {
-        const res = await api.post('/quizzes/generate', {
-          roadmap_id: roadmapId,
-          node_id: node.data.varName,
-          topic: node.data.label
-        });
-        if (res.data && res.data.quiz) {
-          setQuiz(res.data.quiz);
-        }
-      } catch (err) {
-        console.error('Failed to fetch quiz', err);
-      } finally {
-        setLoading(false);
-      }
+  const fetchQuiz = async (forceNew = false) => {
+    setLoading(true);
+    setQuiz(null);
+    setAnswers({});
+    setCurrent(0);
+    setFinished(false);
+    setResult(null);
+    setSubmitError(null);
+    try {
+      const res = await api.post('/quizzes/generate', {
+        roadmap_id: roadmapId,
+        node_id: node.data.varName,
+        topic: node.data.label,
+        force_new: forceNew,
+      });
+      if (res.data?.quiz) setQuiz(res.data.quiz);
+    } catch (err) {
+      console.error('Failed to fetch quiz', err);
+    } finally {
+      setLoading(false);
     }
-
-    fetchQuiz();
-  }, [roadmapId, node]);
-
-  const selectOption = (qIndex, optionIndex) => {
-    setAnswers((a) => ({ ...a, [qIndex]: optionIndex }));
   };
 
-  const goNext = () => {
-    if (!quiz || !quiz.questions) return;
-    if (current < quiz.questions.length - 1) setCurrent(current + 1);
-  };
+  useEffect(() => { fetchQuiz(false); }, [roadmapId, node]);
 
-  const goPrev = () => {
-    if (current > 0) setCurrent(current - 1);
-  };
+  const selectOption = (qIdx, optIdx) => setAnswers(a => ({ ...a, [qIdx]: optIdx }));
+  const goNext = () => { if (quiz && current < quiz.questions.length - 1) setCurrent(current + 1); };
+  const goPrev = () => { if (current > 0) setCurrent(current - 1); };
 
   const handleFinish = async () => {
-    if (!quiz || !quiz.questions) return;
+    if (!quiz?.questions) return;
     const total = quiz.questions.length;
-    let correct = 0;
-    quiz.questions.forEach((q, i) => {
-      if (answers[i] === q.answer_index) correct += 1;
-    });
+    const correct = quiz.questions.filter((q, i) => answers[i] === q.answer_index).length;
 
     setFinished(true);
     setSubmitting(true);
-
-    // Submit results to backend
     try {
-      const payload = {
-        roadmap_id: roadmapId,
-        node_id: node.data.varName,
-        score: correct,
-        total: total,
-        answers: answers
-      };
-      console.log('[quiz] submit payload', payload);
-      const res = await api.post('/quizzes/submit', payload);
-      console.log('[quiz] submit response', res);
-      if (res && res.data && res.data.success) {
-        const r = { passed: res.data.passed, score: correct, total, attempt_id: res.data.attempt_id };
-        setResult(r);
-        setSubmitError(null);
-        if (onSuccess) onSuccess(r);
-      } else {
-        const r = { passed: (correct / total) >= 0.8, score: correct, total };
-        setResult(r);
-        setSubmitError(res?.data?.detail || res?.data?.error || 'Submission failed');
-        if (onSuccess) onSuccess(r);
-      }
+      const res = await api.post('/quizzes/submit', { roadmap_id: roadmapId, node_id: node.data.varName, score: correct, total, answers });
+      const r = { passed: res.data?.success ? res.data.passed : correct / total >= 0.8, score: correct, total };
+      setResult(r);
+      if (onSuccess) onSuccess(r);
     } catch (err) {
-      console.error('Failed to submit quiz results', err);
       setSubmitError(err?.response?.data?.detail || err.message || 'Network error');
-      setResult({ passed: (correct / total) >= 0.8, score: correct, total });
+      setResult({ passed: correct / total >= 0.8, score: correct, total });
     } finally {
       setSubmitting(false);
     }
   };
 
-  const restart = () => {
-    setAnswers({});
-    setCurrent(0);
-    setFinished(false);
-    setResult(null);
-  };
+  const pct = quiz?.questions ? Math.round(((current + 1) / quiz.questions.length) * 100) : 0;
 
-  // UI
-  const modalContent = (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-2xl bg-white rounded-xl shadow-xl p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xl font-semibold">Quiz: {node.data.label}</h3>
-          <div className="flex items-center gap-2">
-            <button onClick={onClose} className="px-3 py-1 rounded bg-gray-100">Close</button>
+  const modal = (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-midnight/60 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden font-sans">
+        {/* Header */}
+        <div className="bg-midnight px-6 py-4 flex items-center justify-between">
+          <div>
+            <p className="text-slate-400 text-xs uppercase tracking-widest mb-0.5">Quiz</p>
+            <h3 className="text-white font-bold truncate" style={{ fontFamily: "'Playfair Display', serif" }}>
+              {node.data.label}
+            </h3>
           </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
-        {loading && (
-          <div className="flex items-center gap-3">
-            <svg className="animate-spin h-5 w-5 text-gray-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-            </svg>
-            <p className="text-sm text-gray-600">Generating quiz...</p>
-          </div>
-        )}
+        <div className="p-6">
+          {/* Loading */}
+          {loading && (
+            <div className="flex flex-col items-center justify-center py-14 gap-3">
+              <div className="h-8 w-8 rounded-full border-2 border-coral border-t-transparent animate-spin" />
+              <p className="text-slate-400 text-sm">Crafting your quiz…</p>
+            </div>
+          )}
 
-        {!loading && !quiz && <p className="text-sm text-gray-500">No quiz available.</p>}
+          {!loading && !quiz && (
+            <p className="text-center text-slate-400 py-8 text-sm">No quiz available.</p>
+          )}
 
-        {quiz && quiz.questions && (
-          <div>
-            {!finished ? (
-              <div>
-                <div className="mb-2 text-sm text-gray-600">Question {current + 1} of {quiz.questions.length}</div>
-                <div className="p-4 border rounded-lg">
-                  <p className="font-medium text-lg">{quiz.questions[current].question}</p>
-                  <div className="mt-3 space-y-3">
-                    {quiz.questions[current].options.map((opt, oi) => (
-                      <label key={oi} className={`flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-gray-50 ${answers[current] === oi ? 'bg-blue-50' : ''}`}>
-                        <input type="radio" name={`q-${current}`} checked={answers[current] === oi} onChange={() => selectOption(current, oi)} />
-                        <span>{opt}</span>
-                      </label>
-                    ))}
-                  </div>
+          {/* Question */}
+          {quiz?.questions && !finished && (
+            <div>
+              {/* Progress */}
+              <div className="mb-5">
+                <div className="flex justify-between text-xs text-slate-400 mb-1.5">
+                  <span>Question {current + 1} of {quiz.questions.length}</span>
+                  <span className="text-coral font-semibold">{pct}%</span>
                 </div>
-
-                <div className="flex items-center justify-between mt-4">
-                  <div>
-                    <button onClick={goPrev} disabled={current===0} className="px-3 py-2 mr-2 rounded bg-gray-100 disabled:opacity-50">Previous</button>
-                    {current < quiz.questions.length - 1 ? (
-                      <button onClick={goNext} disabled={answers[current] === undefined} className="px-3 py-2 rounded bg-blue-600 text-white disabled:opacity-50">Next</button>
-                    ) : (
-                      <button onClick={handleFinish} disabled={answers[current] === undefined || submitting} className="px-3 py-2 rounded bg-green-600 text-white disabled:opacity-50">{submitting ? 'Submitting...' : 'Finish'}</button>
-                    )}
-                  </div>
-                  <div className="text-sm text-gray-600">Select an answer to continue</div>
+                <div className="w-full bg-sage rounded-full h-1.5">
+                  <div className="h-1.5 rounded-full bg-coral transition-all duration-300" style={{ width: `${pct}%` }} />
                 </div>
               </div>
-            ) : (
-              <div>
-                <div className="p-4 bg-gray-50 rounded mb-4">
-                  <div className="text-lg font-medium">Result</div>
-                  <div className="mt-2">Score: <strong>{result?.score}/{result?.total}</strong></div>
-                  <div className={`mt-1 ${result?.passed ? 'text-green-600' : 'text-red-600'}`}>{result?.passed ? 'Passed' : 'Failed'} (Passing >= 80%)</div>
-                </div>
 
-                <div className="space-y-4 max-h-[60vh] overflow-auto">
-                  {quiz.questions.map((q, i) => (
-                    <div key={i} className="p-3 border rounded">
-                      <p className="font-medium">{i + 1}. {q.question}</p>
-                      <div className="mt-2">
-                        <p>Your answer: <strong>{answers[i] !== undefined ? q.options[answers[i]] : 'No answer'}</strong></p>
-                        <p>Correct answer: <strong>{q.options[q.answer_index]}</strong></p>
-                        {q.explanation && <p className="text-sm text-gray-600 mt-1">{q.explanation}</p>}
-                      </div>
-                    </div>
+              <div className="bg-sage rounded-2xl p-5 mb-5">
+                <p className="font-semibold text-midnight leading-relaxed mb-4">{quiz.questions[current].question}</p>
+                <div className="space-y-2">
+                  {quiz.questions[current].options.map((opt, oi) => (
+                    <label
+                      key={oi}
+                      className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all
+                        ${answers[current] === oi
+                          ? 'border-coral bg-coral/8 shadow-sm'
+                          : 'border-midnight/5 bg-white hover:border-midnight/10'}`}
+                      style={answers[current] === oi ? { background: 'rgba(255,127,80,0.07)' } : {}}
+                    >
+                      <input
+                        type="radio"
+                        name={`q-${current}`}
+                        checked={answers[current] === oi}
+                        onChange={() => selectOption(current, oi)}
+                        className="accent-coral"
+                      />
+                      <span className="text-sm text-midnight">{opt}</span>
+                    </label>
                   ))}
                 </div>
+              </div>
 
-                <div className="flex items-center justify-end gap-2 mt-4">
-                  <button onClick={restart} className="px-3 py-2 rounded bg-gray-100">Retake</button>
-                  <button onClick={onClose} className="px-3 py-2 rounded bg-blue-600 text-white">Close</button>
-                </div>
-                {submitError && (
-                  <div className="mt-3 text-sm text-red-600">Submission error: {submitError}</div>
+              <div className="flex items-center justify-between">
+                <button onClick={goPrev} disabled={current === 0}
+                  className="px-4 py-2 text-sm rounded-full bg-sage text-midnight hover:bg-sage/80 disabled:opacity-30 transition-colors">
+                  ← Prev
+                </button>
+                {current < quiz.questions.length - 1 ? (
+                  <button onClick={goNext} disabled={answers[current] === undefined}
+                    className="px-5 py-2 text-sm rounded-full bg-midnight text-white hover:opacity-80 disabled:opacity-30 transition-all">
+                    Next →
+                  </button>
+                ) : (
+                  <button onClick={handleFinish} disabled={answers[current] === undefined || submitting}
+                    className="px-5 py-2 text-sm rounded-full bg-coral text-white font-semibold hover:opacity-90 disabled:opacity-40 transition-all shadow-sm">
+                    {submitting ? 'Submitting…' : 'Finish ✓'}
+                  </button>
                 )}
               </div>
-            )}
-          </div>
-        )}
+            </div>
+          )}
+
+          {/* Result */}
+          {finished && result && (
+            <div>
+              <div className={`rounded-2xl p-6 mb-5 text-center ${result.passed ? 'bg-coral/8' : 'bg-red-50'}`}
+                style={result.passed ? { background: 'rgba(255,127,80,0.07)' } : {}}>
+                {result.passed ? (
+                  <>
+                    <CheckCircle className="h-14 w-14 text-coral mx-auto mb-3" />
+                    <h4 className="text-2xl font-bold text-midnight mb-1" style={{ fontFamily: "'Playfair Display', serif" }}>
+                      🎉 Passed!
+                    </h4>
+                    <p className="text-slate-500 text-sm">Excellent work. {result.score}/{result.total} correct.</p>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="h-14 w-14 text-red-400 mx-auto mb-3" />
+                    <h4 className="text-2xl font-bold text-midnight mb-1" style={{ fontFamily: "'Playfair Display', serif" }}>
+                      Not quite yet
+                    </h4>
+                    <p className="text-slate-500 text-sm">You scored {result.score}/{result.total}. Need 80% to pass.</p>
+                  </>
+                )}
+                <p className="mt-3 text-4xl font-bold text-midnight">{result.score}<span className="text-slate-300">/{result.total}</span></p>
+              </div>
+
+              {/* Review */}
+              <div className="space-y-3 max-h-60 overflow-y-auto pr-1 mb-4">
+                {quiz.questions.map((q, i) => {
+                  const userAns = answers[i];
+                  const correct = userAns === q.answer_index;
+                  return (
+                    <div key={i} className={`p-3.5 rounded-xl border text-sm ${correct ? 'border-coral/20 bg-coral/5' : 'border-red-200 bg-red-50'}`}
+                      style={correct ? { background: 'rgba(255,127,80,0.05)', borderColor: 'rgba(255,127,80,0.2)' } : {}}>
+                      <p className="font-medium text-midnight mb-1">{i + 1}. {q.question}</p>
+                      <p className={correct ? 'text-coral' : 'text-red-600'}>
+                        Your answer: <strong>{userAns !== undefined ? q.options[userAns] : 'No answer'}</strong>
+                        {!correct && <> → <strong className="text-coral">{q.options[q.answer_index]}</strong></>}
+                      </p>
+                      {q.explanation && <p className="text-slate-400 text-xs mt-1 italic">{q.explanation}</p>}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {submitError && <p className="text-xs text-amber-600 mb-3">⚠ {submitError}</p>}
+
+              <div className="flex gap-2 justify-end">
+                <button onClick={() => fetchQuiz(true)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm rounded-full bg-sage text-midnight hover:bg-sage/80 transition-colors">
+                  <RotateCcw className="h-3.5 w-3.5" />Retake (new questions)
+                </button>
+                <button onClick={onClose}
+                  className="px-5 py-2 text-sm rounded-full bg-coral text-white font-semibold hover:opacity-90 transition-all shadow-sm">
+                  Close
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 
-  const modalRoot = typeof document !== 'undefined' ? document.getElementById('modal-root') : null;
-  if (modalRoot) return createPortal(modalContent, modalRoot);
-  return modalContent;
+  const rootEl = typeof document !== 'undefined' ? document.getElementById('modal-root') : null;
+  return rootEl ? createPortal(modal, rootEl) : modal;
 }

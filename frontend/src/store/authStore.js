@@ -6,7 +6,9 @@ const authStore = (set) => ({
   user: null,
   token: null,
   isAuthenticated: false,
+
   setUser: (user) => set({ user, isAuthenticated: !!user }),
+
   setToken: (token) => {
     if (token) {
       localStorage.setItem('token', token);
@@ -14,30 +16,12 @@ const authStore = (set) => ({
     }
     set({ token, isAuthenticated: !!token });
   },
+
   signOut: () => {
     localStorage.removeItem('token');
-    set({ user: null, token: null, isAuthenticated: false });
     delete api.defaults.headers.common['Authorization'];
+    set({ user: null, token: null, isAuthenticated: false });
   },
-  initialize: () => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      set({ token, isAuthenticated: true }); // Set authenticated immediately with token
-      
-      // Then fetch user data in background
-      api.get('/auth/me')
-        .then(response => {
-          if (response.data.success) {
-            set({ user: response.data.data });
-          }
-        })
-        .catch(() => {
-          // Don't clear auth state on failed /me request
-          console.warn('Failed to fetch user data, but keeping session active');
-        });
-    }
-  }
 });
 
 export const useAuthStore = create(
@@ -46,7 +30,13 @@ export const useAuthStore = create(
     partialize: (state) => ({
       token: state.token,
       user: state.user,
-      isAuthenticated: state.isAuthenticated
-    })
+      isAuthenticated: state.isAuthenticated,
+    }),
+    onRehydrateStorage: () => (state) => {
+      // Restore auth header from persisted token on page reload
+      if (state?.token) {
+        api.defaults.headers.common['Authorization'] = `Bearer ${state.token}`;
+      }
+    },
   })
 );

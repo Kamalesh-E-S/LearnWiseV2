@@ -1,4 +1,3 @@
-from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, Form, Request # type: ignore
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm # type: ignore
 from fastapi.responses import JSONResponse
@@ -7,12 +6,17 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User
-from app.schemas import UserCreate, UserResponse, Token, TokenData
-from app.auth.security import get_password_hash, verify_password, create_access_token
+from app.schemas import UserCreate, UserResponse, Token
+from app.auth.security import (
+    get_password_hash,
+    verify_password,
+    create_access_token,
+    SECRET_KEY,
+    ALGORITHM,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+)
 from datetime import datetime, timedelta
 from jose import JWTError, jwt # type: ignore
-from app.models import Creation, GraphNodes
-from app.schemas import CreationBase, CreationResponse, GraphNodesResponse
 
 router = APIRouter()
 
@@ -38,13 +42,9 @@ async def signup(
     db: Session = Depends(get_db)
 ):
     try:
-        # Log request data for debugging
-        form_data = await request.form()
-        print("Received form data:", form_data)
-        
         # Validate input using Pydantic model
         user_data = UserCreate(email=email, password=password)
-        
+
         # Check for existing user
         existing_user = get_user_by_email(db, user_data.email)
         if existing_user:
@@ -60,26 +60,23 @@ async def signup(
             password_hash=hashed_password,
             created_at=datetime.utcnow()
         )
-        
+
         db.add(new_user)
         db.commit()
         db.refresh(new_user)
-        
-        # Return user data
+
         return jsonable_encoder(UserResponse(
             id=new_user.id,
             email=new_user.email,
             created_at=new_user.created_at
         ))
-        
+
     except ValidationError as e:
-        print("Validation error:", str(e))
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={"detail": e.errors()}
         )
     except Exception as e:
-        print("Unexpected error:", str(e))
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "An unexpected error occurred"}
@@ -93,16 +90,11 @@ async def login(
     db: Session = Depends(get_db)
 ):
     try:
-        # Log request data for debugging
-        print("Login attempt for username:", form_data.username)
-        
         user = authenticate_user(db, form_data.username, form_data.password)
         if not user:
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                content={
-                    "detail": "Incorrect email or password"
-                },
+                content={"detail": "Incorrect email or password"},
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
@@ -110,39 +102,33 @@ async def login(
         user.last_login = datetime.utcnow()
         db.commit()
 
-        # Create access token
+        # Create access token using the constant from security.py
         access_token = create_access_token(
             data={"sub": user.email},
-            expires_delta=timedelta(minutes=1440)
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         )
-        
+
         return {
             "access_token": access_token,
             "token_type": "bearer"
         }
-        
+
     except ValidationError as e:
-        print("Validation error:", str(e))
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={"detail": e.errors()}
         )
     except Exception as e:
-        print("Unexpected error:", str(e))
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "An unexpected error occurred"}
         )
-    
+
 # Get current user
 @router.get("/me", response_model=UserResponse)
 async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     try:
-        payload = jwt.decode(
-            token,
-            "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7",
-            algorithms=["HS256"]
-        )
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
             raise HTTPException(
@@ -167,18 +153,26 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
 
     return user
 
-@router.get("/ongoing", response_model=List[GraphNodesResponse])
-async def get_ongoing_roadmaps(db: Session = Depends(get_db)):
-    return db.query(GraphNodes).filter(GraphNodes.completed == False).all()
 
-@router.get("/completed", response_model=List[GraphNodesResponse])
-async def get_completed_roadmaps(db: Session = Depends(get_db)):
-    return db.query(GraphNodes).filter(GraphNodes.completed == True).all()
+@router.post("/change-password")
+async def change_password(
+    data: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Allow authenticated users to change their password."""
+    current_password = data.get("current_password")
+    new_password = data.get("new_password")
 
-@router.post("/create-roadmap", response_model=CreationResponse)
-async def create_roadmap(roadmap: CreationBase, db: Session = Depends(get_db)):
-    new_roadmap = Creation(**roadmap.dict(), created_at=datetime.utcnow())
-    db.add(new_roadmap)
+    if not current_password or not new_password:
+        raise HTTPException(status_code=400, detail="current_password and new_password are required")
+
+    if not verify_password(current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Incorrect current password")
+
+    if len(new_password) < 5:
+        raise HTTPException(status_code=400, detail="New password must be at least 5 characters")
+
+    current_user.password_hash = get_password_hash(new_password)
     db.commit()
-    db.refresh(new_roadmap)
-    return new_roadmap
+    return {"success": True, "message": "Password updated successfully"}

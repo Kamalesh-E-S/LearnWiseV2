@@ -28,5 +28,11 @@
 }
 
 body {
-  background-color: #0e1117;
+  background-color: #fcfaf7;
+  /* parchment */
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: #1a202c;
+  /* midnight */
 }

@@ -1,248 +1,164 @@
-import requests
-import json
-from typing import List, Dict, Any
-from dotenv import load_dotenv
-import os
+"""
+app/services/jobs.py
 
-load_dotenv()
+Real job recommendation service — NO AI-generated fallback.
+  1. Fetches concurrently from LinkedIn + Naukri via python-jobspy
+  2. Scores every job across four dimensions:
+       - Skill match     (40 %)
+       - Title relevance (30 %)
+       - Level match     (20 %)
+       - Location bonus  (10 %)
+  3. Returns top-N ranked jobs — all with real job_url links
+  4. If scrapers return nothing, raises a clear error (no fake data)
+"""
+from __future__ import annotations
+
+import asyncio
+import re
+import sys
+import os
+import traceback
+from typing import Any
+
+# ── locate the real scrapers ─────────────────────────────────────────────────
+_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, _BACKEND_ROOT)
+
+from src.job_api import fetch_linkedin_jobs, fetch_naukri_jobs
+
+
+# ── Scoring helpers ───────────────────────────────────────────────────────────
+
+def _skill_score(job: dict, skills: list[str]) -> float:
+    """0.0–1.0: fraction of queried skills found in description + title."""
+    if not skills:
+        return 0.5
+    haystack = job.get("_full_description", "") + " " + job.get("_title_lower", "")
+    hits = sum(
+        1 for s in skills
+        if re.search(r'\b' + re.escape(s.lower()) + r'\b', haystack)
+    )
+    return hits / len(skills)
+
+
+def _title_score(job: dict, skills: list[str]) -> float:
+    """1.0 if any skill keyword appears in the job title, else 0.2."""
+    title = job.get("_title_lower", "")
+    if not title or not skills:
+        return 0.3
+    for s in skills:
+        if re.search(r'\b' + re.escape(s.lower()) + r'\b', title):
+            return 1.0
+    return 0.2
+
+
+def _level_score(job: dict, desired_levels: list[str] | None) -> float:
+    """0.0–1.0: seniority alignment between job and the user's target levels."""
+    if not desired_levels:
+        return 0.5
+    job_level = job.get("level", "").lower()
+    if any(w in job_level for w in ("senior", "lead", "principal")):
+        job_bucket = "senior"
+    elif any(w in job_level for w in ("entry", "junior", "intern", "fresher", "associate")):
+        job_bucket = "entry"
+    else:
+        job_bucket = "mid"
+
+    for dl in desired_levels:
+        dl_l = dl.lower()
+        if any(w in dl_l for w in ("senior", "master", "advanced")):
+            return {"senior": 1.0, "mid": 0.5, "entry": 0.1}[job_bucket]
+        elif any(w in dl_l for w in ("beginner", "entry", "started", "get started")):
+            return {"entry": 1.0, "mid": 0.5, "senior": 0.2}[job_bucket]
+        else:  # intermediate / mid
+            return {"mid": 1.0, "entry": 0.5, "senior": 0.5}[job_bucket]
+    return 0.5
+
+
+def _location_score(job: dict, preferred_location: str | None) -> float:
+    if not preferred_location:
+        return 0.5
+    loc = (job.get("location") or "").lower()
+    return 1.0 if preferred_location.lower() in loc else 0.3
+
+
+def _rank(job: dict, skills: list[str], levels: list[str] | None, location: str | None) -> float:
+    return (
+        0.40 * _skill_score(job, skills)
+        + 0.30 * _title_score(job, skills)
+        + 0.20 * _level_score(job, levels)
+        + 0.10 * _location_score(job, location)
+    )
+
+
+def _clean(job: dict) -> dict:
+    """Strip internal underscore fields before returning to the API."""
+    return {k: v for k, v in job.items() if not k.startswith("_")}
+
+
+# ── Service ───────────────────────────────────────────────────────────────────
 
 class JobsService:
-    def __init__(self):
-        """Initialize jobs service"""
-        # You can use various job APIs:
-        # - JSearch API (RapidAPI)
-        # - Indeed API
-        # - LinkedIn API
-        # - Custom Naukri scraping
-        self.jsearch_api_key = os.getenv("JSEARCH_API_KEY")
-        self.jsearch_host = "jsearch.p.rapidapi.com"
 
-    async def fetch_jobs_from_naukri(self, skills: List[str], num_jobs: int = 6) -> Dict[str, Any]:
+    async def fetch_jobs_from_naukri(
+        self,
+        skills: list[str],
+        num_jobs: int = 9,
+        levels: list[str] | None = None,
+        location: str | None = "India",
+    ) -> dict[str, Any]:
         """
-        Fetch job recommendations from Naukri-like sources based on skills.
-        Uses a combination of APIs and mock data.
+        Fetch real jobs from LinkedIn + Naukri, score them, return top-N.
+        Never falls back to AI-generated data.
         """
+        if not skills:
+            return {"success": False, "error": "No skills provided."}
+
+        loop = asyncio.get_event_loop()
+        per_site = max(num_jobs, 15)          # fetch more so scoring has better pool
+
         try:
-            jobs = []
-            
-            # For now, we'll use mock data that represents Naukri jobs
-            # In production, you would integrate with actual Naukri API or web scraping
-            for skill in skills[:3]:  # Limit to top 3 skills
-                naukri_jobs = await self._get_naukri_jobs_for_skill(skill)
-                jobs.extend(naukri_jobs)
-            
-            # Sort by relevance and return top N
-            jobs = jobs[:num_jobs]
-            
-            return {
-                "success": True,
-                "data": {
-                    "jobs": jobs
-                }
-            }
-        
-        except Exception as e:
-            print(f"Error fetching jobs: {str(e)}")
+            linkedin_jobs, naukri_jobs = await asyncio.gather(
+                loop.run_in_executor(
+                    None, fetch_linkedin_jobs, skills, location or "India", per_site
+                ),
+                loop.run_in_executor(
+                    None, fetch_naukri_jobs, skills, location or "India", per_site
+                ),
+            )
+        except Exception as exc:
+            traceback.print_exc()
+            return {"success": False, "error": f"Scraper failed: {exc}"}
+
+        raw_jobs = linkedin_jobs + naukri_jobs
+        print(f"[jobs] real: {len(linkedin_jobs)} LinkedIn + {len(naukri_jobs)} Naukri")
+
+        if not raw_jobs:
             return {
                 "success": False,
-                "error": f"Failed to fetch jobs: {str(e)}"
+                "error": (
+                    "No live job listings found right now for these skills. "
+                    "Job boards occasionally rate-limit automated requests — "
+                    "please try again in a few seconds."
+                ),
             }
 
-    async def _get_naukri_jobs_for_skill(self, skill: str) -> List[Dict[str, Any]]:
-        """
-        Fetch jobs for a specific skill from Naukri sources.
-        This is a mock implementation - replace with actual API calls.
-        """
-        # Naukri job listings based on skill
-        # Mock data representing real Naukri jobs
-        naukri_jobs_db = {
-            "Python": [
-                {
-                    "title": "Python Developer",
-                    "company": "TCS (Tata Consultancy Services)",
-                    "description": "Develop and maintain Python-based applications. Work with Django/Flask frameworks and handle RESTful APIs.",
-                    "required_skills": ["Python", "Django", "REST API"],
-                    "salary_range": "₹4,00,000 - ₹7,00,000",
-                    "job_type": "Full-time",
-                    "level": "Mid-level"
-                },
-                {
-                    "title": "Senior Python Engineer",
-                    "company": "Infosys",
-                    "description": "Lead Python development projects, mentor junior developers, and architect scalable solutions.",
-                    "required_skills": ["Python", "System Design", "Leadership"],
-                    "salary_range": "₹8,00,000 - ₹12,00,000",
-                    "job_type": "Full-time",
-                    "level": "Senior"
-                },
-                {
-                    "title": "Data Engineer - Python",
-                    "company": "ICICI Bank",
-                    "description": "Build data pipelines and analytics solutions using Python. Work with big data technologies.",
-                    "required_skills": ["Python", "SQL", "Data Engineering"],
-                    "salary_range": "₹6,00,000 - ₹9,00,000",
-                    "job_type": "Full-time",
-                    "level": "Mid-level"
-                }
-            ],
-            "React": [
-                {
-                    "title": "React Frontend Developer",
-                    "company": "Flipkart",
-                    "description": "Build responsive UIs with React, work on e-commerce platforms, optimize performance.",
-                    "required_skills": ["React", "JavaScript", "CSS"],
-                    "salary_range": "₹5,00,000 - ₹8,00,000",
-                    "job_type": "Full-time",
-                    "level": "Mid-level"
-                },
-                {
-                    "title": "Senior React Developer",
-                    "company": "Swiggy",
-                    "description": "Lead frontend development, architect component libraries, mentor team members.",
-                    "required_skills": ["React", "TypeScript", "Web Performance"],
-                    "salary_range": "₹9,00,000 - ₹13,00,000",
-                    "job_type": "Full-time",
-                    "level": "Senior"
-                },
-                {
-                    "title": "React Native Developer",
-                    "company": "Byju's",
-                    "description": "Develop cross-platform mobile apps with React Native for iOS and Android.",
-                    "required_skills": ["React Native", "JavaScript", "Mobile Development"],
-                    "salary_range": "₹4,50,000 - ₹7,50,000",
-                    "job_type": "Full-time",
-                    "level": "Mid-level"
-                }
-            ],
-            "JavaScript": [
-                {
-                    "title": "Full Stack JavaScript Developer",
-                    "company": "Oyo Rooms",
-                    "description": "Build full-stack applications with Node.js and React. Work on real-time features.",
-                    "required_skills": ["JavaScript", "Node.js", "React"],
-                    "salary_range": "₹4,00,000 - ₹7,00,000",
-                    "job_type": "Full-time",
-                    "level": "Mid-level"
-                },
-                {
-                    "title": "JavaScript Developer",
-                    "company": "Amazon",
-                    "description": "Develop scalable web applications, optimize JavaScript code, work on performance.",
-                    "required_skills": ["JavaScript", "Web Development", "Performance"],
-                    "salary_range": "₹8,00,000 - ₹12,00,000",
-                    "job_type": "Full-time",
-                    "level": "Senior"
-                },
-                {
-                    "title": "Junior JavaScript Developer",
-                    "company": "Accenture",
-                    "description": "Start your career as a JavaScript developer, work with mentors, learn best practices.",
-                    "required_skills": ["JavaScript", "HTML", "CSS"],
-                    "salary_range": "₹2,50,000 - ₹4,00,000",
-                    "job_type": "Full-time",
-                    "level": "Entry-level"
-                }
-            ],
-            "TypeScript": [
-                {
-                    "title": "TypeScript Developer",
-                    "company": "Microsoft",
-                    "description": "Develop type-safe applications with TypeScript, contribute to open-source projects.",
-                    "required_skills": ["TypeScript", "JavaScript", "OOP"],
-                    "salary_range": "₹7,00,000 - ₹10,00,000",
-                    "job_type": "Full-time",
-                    "level": "Mid-level"
-                },
-                {
-                    "title": "Senior TypeScript Engineer",
-                    "company": "Google",
-                    "description": "Design and implement large-scale TypeScript projects, lead architecture decisions.",
-                    "required_skills": ["TypeScript", "System Design", "Leadership"],
-                    "salary_range": "₹12,00,000 - ₹18,00,000",
-                    "job_type": "Full-time",
-                    "level": "Senior"
-                }
-            ],
-            "Web Development": [
-                {
-                    "title": "Web Developer",
-                    "company": "HCL Technologies",
-                    "description": "Develop responsive websites and web applications using modern technologies.",
-                    "required_skills": ["HTML", "CSS", "JavaScript"],
-                    "salary_range": "₹3,00,000 - ₹5,00,000",
-                    "job_type": "Full-time",
-                    "level": "Entry-level"
-                },
-                {
-                    "title": "Senior Web Developer",
-                    "company": "Goldman Sachs",
-                    "description": "Lead web development initiatives, architect scalable solutions, mentor developers.",
-                    "required_skills": ["Web Development", "System Design", "Leadership"],
-                    "salary_range": "₹10,00,000 - ₹15,00,000",
-                    "job_type": "Full-time",
-                    "level": "Senior"
-                }
-            ],
-            "Machine Learning": [
-                {
-                    "title": "ML Engineer",
-                    "company": "Databricks",
-                    "description": "Build machine learning models, work with large datasets, deploy ML solutions.",
-                    "required_skills": ["Machine Learning", "Python", "Data Science"],
-                    "salary_range": "₹6,00,000 - ₹9,00,000",
-                    "job_type": "Full-time",
-                    "level": "Mid-level"
-                },
-                {
-                    "title": "Senior ML Researcher",
-                    "company": "DeepMind",
-                    "description": "Research and develop advanced ML algorithms, publish papers, lead research initiatives.",
-                    "required_skills": ["Machine Learning", "Research", "Leadership"],
-                    "salary_range": "₹12,00,000 - ₹18,00,000",
-                    "job_type": "Full-time",
-                    "level": "Senior"
-                }
-            ],
-            "Data Science": [
-                {
-                    "title": "Data Scientist",
-                    "company": "McKinsey",
-                    "description": "Analyze data, build predictive models, provide business insights.",
-                    "required_skills": ["Data Science", "Python", "SQL"],
-                    "salary_range": "₹5,00,000 - ₹8,00,000",
-                    "job_type": "Full-time",
-                    "level": "Mid-level"
-                }
-            ],
-            "Node.js": [
-                {
-                    "title": "Node.js Backend Developer",
-                    "company": "Netflix",
-                    "description": "Build scalable backend services with Node.js, optimize API performance.",
-                    "required_skills": ["Node.js", "JavaScript", "REST API"],
-                    "salary_range": "₹6,00,000 - ₹9,00,000",
-                    "job_type": "Full-time",
-                    "level": "Mid-level"
-                }
-            ]
-        }
-        
-        # Get jobs for the skill, default to generic web development jobs
-        skill_lower = skill.lower()
-        jobs = naukri_jobs_db.get(skill, [])
-        
-        # If no exact match, try partial matching
-        if not jobs:
-            for key in naukri_jobs_db.keys():
-                if skill_lower in key.lower() or key.lower() in skill_lower:
-                    jobs = naukri_jobs_db.get(key, [])
-                    break
-        
-        # If still no jobs, return generic tech jobs
-        if not jobs:
-            jobs = naukri_jobs_db.get("Web Development", [])[:2]
-        
-        return jobs
+        # Score + deduplicate by title+company
+        seen: set[str] = set()
+        unique: list[dict] = []
+        for job in raw_jobs:
+            key = (job.get("title", "").lower(), job.get("company", "").lower())
+            if key not in seen:
+                seen.add(key)
+                job["_score"] = _rank(job, skills, levels, location)
+                unique.append(job)
 
-# Create singleton instance
+        ranked = sorted(unique, key=lambda j: j["_score"], reverse=True)
+        top = [_clean(j) for j in ranked[:num_jobs]]
+
+        return {"success": True, "data": {"jobs": top}}
+
+
+# Singleton used by the route layer
 jobs_service = JobsService()

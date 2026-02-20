@@ -1,25 +1,23 @@
 import os
 import json
 from groq import Groq
-from typing import Dict, Any
+from typing import Dict, Any, List
 from dotenv import load_dotenv
 
 
 class RoadmapLLMService:
     def __init__(self):
         """Initialize Groq client with API key from environment"""
-        load_dotenv()  # Load environment variables from .env
-        api_key = os.getenv("GROQ_API_KEY")        
+        load_dotenv()
+        api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise ValueError("GROQ_API_KEY environment variable is required")
         self.client = Groq(api_key=api_key)
 
     async def generate_roadmap_content(self, skill: str, timeframe: str, current_knowledge: str, target_level: str) -> Dict[Any, Any]:
-        """
-        Generate personalized roadmap content using Groq LLM
-        """
+        """Generate personalized roadmap content using Groq LLM"""
         prompt = f"""
-I need a personalized roadmap for learning {skill} within {timeframe}. 
+I need a personalized roadmap for learning {skill} within {timeframe}.
 My current knowledge level is {current_knowledge}, and I'd like to reach a {target_level} level of proficiency.
 
 Please create a hierarchical learning path with:
@@ -33,10 +31,10 @@ EXAMPLE --FOLLOW THIS FORMAT STRICTLY MAXIMUM DOUBLE HASH MUST BE 6 AND TRY AVOI
 
 # [root] js
 ## [a1] Week 1
-### [a11] JavaScript Refresher  
+### [a11] JavaScript Refresher
 #### [a111] Variables and Data Types
 
-NOTE: 
+NOTE:
 1.total number of quadruple hashes should be 4 or less. use it when the subtopic is actually required.
 2.total number of double hashes should be 6 or less.
 3.keep the node names short and concise.
@@ -46,9 +44,7 @@ NOTE:
 7.Make sure the time nodes are properly divided.
 """
 
-
         try:
-            # Generate content using Llama 3 70b
             response = self.client.chat.completions.create(
                 messages=[
                     {
@@ -65,49 +61,39 @@ NOTE:
                 max_tokens=2048
             )
             content = response.choices[0].message.content
- 
+
             # Split sections based on '---'
             sections = content.strip().split('---')
-
-            # Extract mermaid section only
             mermaid_section = sections[0].strip() if len(sections) > 0 else ''
 
             return {
                 "success": True,
                 "data": {
                     "mermaid": mermaid_section.strip(),
-                    "descriptions": ""  # Empty string since we'll populate this later
+                    "descriptions": ""
                 }
             }
 
         except Exception as e:
             print(f"Error generating roadmap content: {str(e)}")
-            # Return default content in case of error
             return {
                 "success": False,
                 "error": f"Failed to generate roadmap content: {str(e)}"
             }
 
     async def generate_quiz_for_topic(self, topic: str, skill: str = None, level: str = None, num_questions: int = 5, difficulty: str = "medium") -> Dict[str, Any]:
-        """
-        Generate a multiple-choice quiz for a given topic.
-        The LLM is instructed to return a JSON array of questions with fields:
-        - question: string
-        - options: list[string]
-        - answer_index: integer (0-based)
-        - explanation: string
-        """
+        """Generate a multiple-choice quiz for a given topic."""
         skill_part = f"Main skill: {skill}.\n" if skill else ""
         level_part = f"Learner level: {level}.\n" if level else ""
 
         prompt = f"""
-    Generate a {num_questions}-question multiple-choice quiz for the topic: {topic}.
-    {skill_part}{level_part}
-    Return ONLY a JSON object with a top-level key `questions` that is an array of question objects.
-    Each question object must have: `question` (string), `options` (array of 3-5 strings), `answer_index` (0-based integer), and `explanation` (short string).
-    Do not include any additional text, markdown, or commentary outside the JSON.
-    Difficulty: {difficulty}.
-    """
+Generate a {num_questions}-question multiple-choice quiz for the topic: {topic}.
+{skill_part}{level_part}
+Return ONLY a JSON object with a top-level key `questions` that is an array of question objects.
+Each question object must have: `question` (string), `options` (array of 3-5 strings), `answer_index` (0-based integer), and `explanation` (short string).
+Do not include any additional text, markdown, or commentary outside the JSON.
+Difficulty: {difficulty}.
+"""
 
         try:
             response = self.client.chat.completions.create(
@@ -122,16 +108,14 @@ NOTE:
 
             content = response.choices[0].message.content.strip()
 
-            # Try to parse JSON from the model output
             try:
                 parsed = json.loads(content)
             except Exception:
-                # Attempt to extract JSON substring
                 start = content.find('{')
                 end = content.rfind('}')
                 if start != -1 and end != -1 and end > start:
                     try:
-                        parsed = json.loads(content[start:end+1])
+                        parsed = json.loads(content[start:end + 1])
                     except Exception as e:
                         return {"success": False, "error": f"Failed to parse LLM JSON: {str(e)}", "raw": content}
                 else:
@@ -143,17 +127,10 @@ NOTE:
             print(f"Error generating quiz: {str(e)}")
             return {"success": False, "error": f"Failed to generate quiz: {str(e)}"}
 
-    async def generate_job_recommendations(self, skills: list, levels: list = None, num_jobs: int = 5) -> Dict[str, Any]:
+    async def generate_job_recommendations(self, skills: List[str], levels: List[str] = None, num_jobs: int = 6) -> Dict[str, Any]:
         """
-        Generate job recommendations based on learned skills and their levels.
-        
-        Args:
-            skills: List of skill names (from completed roadmaps)
-            levels: Optional list of proficiency levels for each skill
-            num_jobs: Number of job recommendations to generate (default: 5)
-        
-        Returns:
-            Dict with success status and job recommendations
+        Generate job recommendations using LLM for any skill.
+        Falls back gracefully if the LLM call fails.
         """
         skills_str = ", ".join(skills)
         levels_str = ""
@@ -171,7 +148,7 @@ Each job object must have:
 - `company` (string): Company name (can be fictional but realistic)
 - `description` (string): Brief job description (2-3 sentences)
 - `required_skills` (array): List of required skills from the provided skills
-- `salary_range` (string): Expected salary range (e.g., "$80,000 - $120,000")
+- `salary_range` (string): Expected salary range in INR (e.g., "₹5,00,000 - ₹8,00,000")
 - `job_type` (string): Full-time, Part-time, Contract, or Remote
 - `level` (string): Entry-level, Mid-level, or Senior
 
@@ -192,16 +169,14 @@ Make the recommendations realistic and achievable with the provided skill set.
 
             content = response.choices[0].message.content.strip()
 
-            # Try to parse JSON from the model output
             try:
                 parsed = json.loads(content)
             except Exception:
-                # Attempt to extract JSON substring
                 start = content.find('{')
                 end = content.rfind('}')
                 if start != -1 and end != -1 and end > start:
                     try:
-                        parsed = json.loads(content[start:end+1])
+                        parsed = json.loads(content[start:end + 1])
                     except Exception as e:
                         return {"success": False, "error": f"Failed to parse LLM JSON: {str(e)}", "raw": content}
                 else:
@@ -213,5 +188,6 @@ Make the recommendations realistic and achievable with the provided skill set.
             print(f"Error generating job recommendations: {str(e)}")
             return {"success": False, "error": f"Failed to generate job recommendations: {str(e)}"}
 
+
 # Create singleton instance
-llm_service = RoadmapLLMService() 
+llm_service = RoadmapLLMService()

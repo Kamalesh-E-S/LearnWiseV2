@@ -1,12 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException 
 from sqlalchemy.orm import Session
-from typing import List
 from datetime import datetime
 import re
 
 from app.database import get_db
 from app.models import ComprehensiveRoadmap
-from app.auth.routes import get_current_user, oauth2_scheme
+from app.auth.routes import get_current_user
 from app.services.llm import llm_service
 from app.services.resources import get_website_links, get_video_links
 from app.services.jobs import jobs_service
@@ -282,40 +281,13 @@ async def get_roadmap(
             ComprehensiveRoadmap.id == roadmap_id,
             ComprehensiveRoadmap.user_id == current_user.id
         ).first()
-        
+
         if not roadmap:
             raise HTTPException(status_code=404, detail="Roadmap not found")
-        
-        # Get resources for each node, excluding level 2 nodes
-        node_desc = {}
-        for node in roadmap.nodes:
-            node_id = node.get('id')
-            node_text = node.get('text', '')
-            
-            # Skip level 2 nodes (time/days nodes)
-            if node_id.startswith('a') and len(node_id) == 2:  # Level 2 nodes have IDs like 'a1', 'a2', etc.
-                node_desc[node_id] = f"Time period: {node_text}"
-                continue
-            
-            # Get resources for non-level 2 nodes, including the skill name in the search
-            search_query = f"{roadmap.skill} {node_text}"
-            websites = get_website_links(search_query)
-            videos = get_video_links(search_query)
-            
-            # Format description to match NodeInfo.jsx expected format
-            description = f"Learn {node_text}"
-            
-            # Add YouTube links if available
-            if videos:
-                description += f"\nyoutube links: {', '.join(videos)}"
-            
-            # Add website links if available
-            if websites:
-                description += f"\nwebsite links: {', '.join(websites)}"
-            
-            node_desc[node_id] = description
-        
-        # Serialize roadmap data
+
+        # Use node descriptions stored at creation time — no live API calls
+        node_desc = roadmap.node_desc or {}
+
         serialized_roadmap = {
             "id": roadmap.id,
             "skill": roadmap.skill,
@@ -324,20 +296,17 @@ async def get_roadmap(
             "current_knowledge": roadmap.current_knowledge,
             "nodes": roadmap.nodes or [],
             "edges": roadmap.edges or [],
-            "markmap": roadmap.content.get('mermaid', '') if roadmap.content else '',
-            "descriptions": roadmap.content.get('descriptions', {}) if roadmap.content else {},
-            "node_desc": node_desc,  # Use the newly generated node_desc
+            "markmap": roadmap.content.get("mermaid", "") if roadmap.content else "",
+            "descriptions": roadmap.content.get("descriptions", {}) if roadmap.content else {},
+            "node_desc": node_desc,
             "marked_nodes": roadmap.marked_nodes or [],
             "is_completed": roadmap.is_completed,
             "completed_at": roadmap.completed_at.isoformat() if roadmap.completed_at else None,
             "created_at": roadmap.created_at.isoformat() if roadmap.created_at else None,
-            "updated_at": roadmap.updated_at.isoformat() if roadmap.updated_at else None
+            "updated_at": roadmap.updated_at.isoformat() if roadmap.updated_at else None,
         }
-        
-        return {
-            "success": True,
-            "roadmap": serialized_roadmap
-        }
+
+        return {"success": True, "roadmap": serialized_roadmap}
     except Exception as e:
         print("Error in get_roadmap:", str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -480,49 +449,115 @@ async def get_job_recommendations(
     db: Session = Depends(get_db)
 ):
     """
-    Get job recommendations based on completed roadmaps.
-    Fetches jobs from Naukri-like sources based on learned skills.
+    Get job recommendations based on ALL roadmaps (ongoing + completed).
+    If the user has no roadmaps at all, returns an empty list with a helpful message.
     """
     try:
-        # Get completed roadmaps for the user
-        completed_roadmaps = db.query(ComprehensiveRoadmap).filter(
-            ComprehensiveRoadmap.user_id == current_user.id,
-            ComprehensiveRoadmap.is_completed == True
+        # Use ALL roadmaps — ongoing and completed — so every user gets recommendations
+        all_roadmaps = db.query(ComprehensiveRoadmap).filter(
+            ComprehensiveRoadmap.user_id == current_user.id
         ).all()
-        
-        if not completed_roadmaps:
+
+        if not all_roadmaps:
             return {
                 "success": True,
                 "jobs": [],
-                "completed_skills": [],
-                "message": "No completed roadmaps found. Complete a roadmap to get job recommendations."
+                "skills": [],
+                "message": "Start a roadmap to get personalised job recommendations, or search any skill below."
             }
-        
-        # Extract skills from completed roadmaps
+
+        # Prefer completed skills first, then add ongoing ones
+        completed_skills = [r.skill for r in all_roadmaps if r.is_completed]
+        ongoing_skills   = [r.skill for r in all_roadmaps if not r.is_completed]
+        # Deduplicate while preserving order
+        seen = set()
         skills = []
-        for roadmap in completed_roadmaps:
-            skills.append(roadmap.skill)
-        
-        # Fetch job recommendations from Naukri service
-        job_response = await jobs_service.fetch_jobs_from_naukri(
-            skills=skills,
-            num_jobs=6
-        )
-        
+        for s in (completed_skills + ongoing_skills):
+            if s.lower() not in seen:
+                seen.add(s.lower())
+                skills.append(s)
+
+        job_response = await jobs_service.fetch_jobs_from_naukri(skills=skills, num_jobs=9)
+
         if not job_response["success"]:
             raise HTTPException(status_code=500, detail=job_response.get("error", "Failed to fetch jobs"))
-        
-        # Extract jobs from response
+
         jobs = job_response["data"].get("jobs", [])
-        
         return {
             "success": True,
             "jobs": jobs,
-            "completed_skills": skills
+            "skills": skills,
+            # Keep backwards-compat key
+            "completed_skills": completed_skills,
         }
-    
+
     except HTTPException:
         raise
     except Exception as e:
         print(f"Error in get_job_recommendations: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/jobs/search")
+async def search_jobs_by_skill(
+    data: dict,
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Free-form job search: user supplies any skill string.
+    Works even if the user has no roadmaps at all.
+    """
+    skill = (data.get("skill") or "").strip()
+    if not skill:
+        raise HTTPException(status_code=400, detail="skill is required")
+
+    try:
+        job_response = await jobs_service.fetch_jobs_from_naukri(skills=[skill], num_jobs=9)
+
+        if not job_response["success"]:
+            raise HTTPException(status_code=500, detail=job_response.get("error", "Failed to fetch jobs"))
+
+        jobs = job_response["data"].get("jobs", [])
+        return {
+            "success": True,
+            "jobs": jobs,
+            "skill": skill,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in search_jobs_by_skill: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{roadmap_id}")
+async def delete_roadmap(
+    roadmap_id: int,
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a roadmap and all associated quiz data."""
+    try:
+        roadmap = db.query(ComprehensiveRoadmap).filter(
+            ComprehensiveRoadmap.id == roadmap_id,
+            ComprehensiveRoadmap.user_id == current_user.id
+        ).first()
+
+        if not roadmap:
+            raise HTTPException(status_code=404, detail="Roadmap not found")
+
+        # Cascade-delete quiz attempts and templates
+        from app.models import QuizAttempt, QuizTemplate
+        db.query(QuizAttempt).filter(QuizAttempt.roadmap_id == roadmap_id).delete()
+        db.query(QuizTemplate).filter(QuizTemplate.roadmap_id == roadmap_id).delete()
+        db.delete(roadmap)
+        db.commit()
+
+        return {"success": True, "message": "Roadmap deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error deleting roadmap: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

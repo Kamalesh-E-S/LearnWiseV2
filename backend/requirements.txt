@@ -1,9 +1,28 @@
-flask==3.0.0
-flask-cors==4.0.0
-flask-jwt-extended==4.5.3
-flask-sqlalchemy==3.1.1
-python-dotenv==1.0.0
-requests==2.31.0
-torch==2.2.0
-transformers==4.37.2
-accelerate==0.27.0
+# Core FastAPI stack
+fastapi
+uvicorn
+python-multipart
+
+# Database
+sqlalchemy
+
+# Auth
+passlib[bcrypt]
+bcrypt==4.0.1
+python-jose[cryptography]
+
+# LLM / AI
+groq
+
+# HTTP client
+requests
+
+# Utilities
+python-dotenv
+pydantic[email]
+
+# Job scraping (LinkedIn, Naukri, Indeed, etc.)
+python-jobspy
+
+# MCP server
+mcp[cli]

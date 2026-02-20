@@ -20,6 +20,7 @@ async def generate_quiz(
         roadmap_id = data.get("roadmap_id")
         node_id = data.get("node_id")
         topic = data.get("topic")
+        force_new = data.get("force_new", False)
 
         if not roadmap_id or not node_id:
             raise HTTPException(status_code=400, detail="roadmap_id and node_id are required")
@@ -35,11 +36,8 @@ async def generate_quiz(
         # If topic not provided, try to get from roadmap node descriptions or nodes
         if not topic:
             topic = None
-            # Try node_desc mapping
             if roadmap.node_desc and node_id in roadmap.node_desc:
                 topic = roadmap.node_desc.get(node_id)
-
-            # Fallback to searching nodes list
             if not topic and roadmap.nodes:
                 for n in roadmap.nodes:
                     if n.get("id") == node_id:
@@ -49,17 +47,18 @@ async def generate_quiz(
         if not topic:
             raise HTTPException(status_code=400, detail="Unable to determine topic for quiz")
 
-        # Check if a quiz template already exists for this user/roadmap/node
+        # Check if a cached quiz template exists for this user/roadmap/node
         quiz_template = db.query(QuizTemplate).filter(
             QuizTemplate.user_id == current_user.id,
             QuizTemplate.roadmap_id == roadmap_id,
             QuizTemplate.node_id == node_id
         ).first()
 
-        if quiz_template and quiz_template.quiz_json:
+        # Return cached quiz UNLESS the user explicitly wants fresh questions
+        if quiz_template and quiz_template.quiz_json and not force_new:
             return {"success": True, "quiz": quiz_template.quiz_json}
 
-        # Otherwise request quiz generation from LLM service (include skill and target level)
+        # Generate new questions from LLM
         llm_resp = await llm_service.generate_quiz_for_topic(topic, skill=roadmap.skill, level=roadmap.target_level)
 
         if not llm_resp.get("success"):
@@ -67,7 +66,7 @@ async def generate_quiz(
 
         quiz_data = llm_resp.get("data")
 
-        # Persist QuizTemplate record
+        # Persist / overwrite QuizTemplate record
         if quiz_template:
             quiz_template.quiz_json = quiz_data
             quiz_template.updated_at = datetime.utcnow()

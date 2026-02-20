@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useRoadmapStore } from '../store/roadmapStore';
-import { Brain, Clock, BookOpen, Target, Check, X, Loader } from 'lucide-react';
+import { Brain, Clock, BookOpen, Target, X, Loader, ArrowRight } from 'lucide-react';
 import api from '../lib/axios';
 
 const LEVELS = ['Get Started', 'Beginner', 'Intermediate', 'Advanced', 'Master'];
+
+const inputCls = 'w-full rounded-xl border border-midnight/10 bg-sage/40 px-4 py-2.5 text-sm text-midnight placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-coral/40 focus:border-coral/40 transition';
 
 export function RoadmapForm() {
   const navigate = useNavigate();
@@ -23,186 +25,150 @@ export function RoadmapForm() {
     setLoading(true);
     setError('');
 
-    // Check for duplicate roadmap with same skill
-    const isDuplicate = roadmaps.some(roadmap => 
-      roadmap.skill.toLowerCase() === skill.toLowerCase()
-    );
-
+    const isDuplicate = roadmaps.some(r => r.skill.toLowerCase() === skill.toLowerCase());
     if (isDuplicate) {
-      setError('A roadmap for this skill already exists');
+      setError('A roadmap for this skill already exists.');
       setLoading(false);
       return;
     }
-    console.log('=== Starting Roadmap Creation ===');
-    console.log('Form Data:', {
-      skill,
-      timeframe,
-      current_knowledge: currentKnowledge,
-      target_level: targetLevel
-    });
-    
-    // Create new roadmap with default content
-    console.log('Sending request to create roadmap...');
-    
-    // Set a longer timeout for the API call
-    const createResponse = await api.post('/roadmap/create', {
-      skill,
-      timeframe,
-      current_knowledge: currentKnowledge,
-      target_level: targetLevel
-    }, {
-      timeout: 60000 // 60 second timeout
-    });
-    
-    // Ensure response was successful
-    if (!createResponse.data.success) {
-      console.error(createResponse.data.error || 'Failed to create roadmap');
-      return;
-    }
-    
-    // Update local state
-    console.log('Roadmap created successfully:', createResponse.data);
-    const newRoadmap = createResponse.data.roadmap;
-    
-    // Check for duplicates before updating state
-    const isDuplicateAfterCreation = roadmaps.some(roadmap => roadmap.id === newRoadmap.id);
-    
-    if (!isDuplicateAfterCreation) {
-      console.log('Updating local state...');
-      const processedRoadmap = {
-        ...newRoadmap,
-        nodes: newRoadmap.nodes || [],
-        edges: newRoadmap.edges || [],
-        marked_nodes: newRoadmap.marked_nodes || [],
-        descriptions: newRoadmap.descriptions || {},
-        markmap: newRoadmap.markmap || ''
-      };
-      
-      // Update state
-      setRoadmaps([...roadmaps, processedRoadmap]);
-      setCurrentRoadmap(processedRoadmap);
-    
-      // Add debugging for navigation
-      console.log('Navigation Debug:', {
-        roadmapId: newRoadmap?.id,
-        roadmapIdType: typeof newRoadmap?.id,
-        fullRoadmap: newRoadmap,
-        processedRoadmap
-      });
 
-      // Try navigation with string conversion
-      if (newRoadmap?.id) {
-        const roadmapId = String(newRoadmap.id);
-        console.log('Attempting navigation to:', `/ongoing/${roadmapId}`);
-        navigate(`/ongoing/${roadmapId}`, { replace: true });
-      } else {
-        console.error("Roadmap ID missing or invalid:", newRoadmap);
+    try {
+      const createResponse = await api.post('/roadmap/create', {
+        skill, timeframe,
+        current_knowledge: currentKnowledge,
+        target_level: targetLevel
+      }, { timeout: 60000 });
+
+      if (!createResponse.data.success) {
+        setError(createResponse.data.error || 'Failed to create roadmap');
+        return;
       }
-    } else {
-      console.log('Roadmap already exists, skipping state update');
-    }
-    
-    console.log('=== Roadmap Creation Completed ===');
-    
-    
 
+      const newRoadmap = createResponse.data.roadmap;
+      const isDuplicateAfter = roadmaps.some(r => r.id === newRoadmap.id);
+      if (!isDuplicateAfter) {
+        const processed = {
+          ...newRoadmap,
+          nodes: newRoadmap.nodes || [],
+          edges: newRoadmap.edges || [],
+          marked_nodes: newRoadmap.marked_nodes || [],
+          descriptions: newRoadmap.descriptions || {},
+          markmap: newRoadmap.markmap || ''
+        };
+        setRoadmaps([...roadmaps, processed]);
+        setCurrentRoadmap(processed);
+        if (newRoadmap?.id) navigate(`/ongoing/${String(newRoadmap.id)}`, { replace: true });
+      }
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || 'Failed to create roadmap');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div className="max-w-2xl mx-auto bg-white p-8 rounded-lg shadow-lg space-y-8">
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-md flex items-center gap-2">
-          <X className="h-5 w-5" />
-          {error}
-        </div>
-      )}
+    <div className="max-w-2xl mx-auto">
+      {/* Page heading */}
+      <div className="mb-8">
+        <h1 className="text-4xl font-bold text-midnight" style={{ fontFamily: "'Playfair Display', serif" }}>
+          Craft Your Roadmap
+        </h1>
+        <p className="text-slate-500 mt-2">Tell us what you want to master and we'll build a personalised path.</p>
+      </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
-            <Brain className="h-5 w-5 text-blue-600" />
-            Skill to Learn
-          </label>
-          <input
-            type="text"
-            value={skill}
-            onChange={(e) => setSkill(e.target.value)}
-            className="w-full rounded-md border border-gray-300 p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            placeholder="e.g., React Development"
-            required
-          />
-        </div>
+      <div className="bg-white rounded-3xl border border-midnight/5 shadow-sm p-8 space-y-6">
+        {error && (
+          <div className="flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+            <X className="h-4 w-4 flex-shrink-0" />{error}
+          </div>
+        )}
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
-            <Clock className="h-5 w-5 text-blue-600" />
-            Timeframe
-          </label>
-          <input
-            type="text"
-            value={timeframe}
-            onChange={(e) => setTimeframe(e.target.value)}
-            className="w-full rounded-md border border-gray-300 p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            placeholder="e.g., 6 months"
-            required
-          />
-        </div>
+        <form onSubmit={handleSubmit} className="space-y-5">
+          {/* Skill */}
+          <div>
+            <label className="flex items-center gap-2 text-sm font-medium text-midnight mb-1.5">
+              <Brain className="h-4 w-4 text-coral" />Skill to Learn
+            </label>
+            <input
+              type="text"
+              value={skill}
+              onChange={(e) => setSkill(e.target.value)}
+              className={inputCls}
+              placeholder="e.g., React Development"
+              required
+            />
+          </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
-            <BookOpen className="h-5 w-5 text-blue-600" />
-            Current Knowledge
-          </label>
-          <textarea
-            value={currentKnowledge}
-            onChange={(e) => setCurrentKnowledge(e.target.value)}
-            className="w-full rounded-md border border-gray-300 p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            rows={3}
-            placeholder="Describe your current knowledge level..."
-            required
-          />
-        </div>
+          {/* Timeframe */}
+          <div>
+            <label className="flex items-center gap-2 text-sm font-medium text-midnight mb-1.5">
+              <Clock className="h-4 w-4 text-coral" />Timeframe
+            </label>
+            <input
+              type="text"
+              value={timeframe}
+              onChange={(e) => setTimeframe(e.target.value)}
+              className={inputCls}
+              placeholder="e.g., 3 months"
+              required
+            />
+          </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
-            <Target className="h-5 w-5 text-blue-600" />
-            Target Level
-          </label>
-          <select
-            value={targetLevel}
-            onChange={(e) => setTargetLevel(e.target.value)}
-            className="w-full rounded-md border border-gray-300 p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            required
+          {/* Current knowledge */}
+          <div>
+            <label className="flex items-center gap-2 text-sm font-medium text-midnight mb-1.5">
+              <BookOpen className="h-4 w-4 text-coral" />Current Knowledge
+            </label>
+            <textarea
+              value={currentKnowledge}
+              onChange={(e) => setCurrentKnowledge(e.target.value)}
+              className={inputCls}
+              rows={3}
+              placeholder="Describe what you already know..."
+              required
+            />
+          </div>
+
+          {/* Target level */}
+          <div>
+            <label className="flex items-center gap-2 text-sm font-medium text-midnight mb-1.5">
+              <Target className="h-4 w-4 text-coral" />Target Level
+            </label>
+            <select
+              value={targetLevel}
+              onChange={(e) => setTargetLevel(e.target.value)}
+              className={inputCls}
+              required
+            >
+              <option value="">Select a level</option>
+              {LEVELS.map((level) => (
+                <option key={level} value={level}>{level}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Submit */}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full flex items-center justify-center gap-2 bg-coral text-white font-semibold py-3.5 rounded-full hover:opacity-90 transition-all disabled:opacity-50 shadow-sm mt-2"
+            style={!loading ? { boxShadow: '0 8px 24px rgba(255,127,80,0.25)' } : {}}
           >
-            <option value="">Select a level</option>
-            {LEVELS.map((level) => (
-              <option key={level} value={level}>
-                {level}
-              </option>
-            ))}
-          </select>
-        </div>
+            {loading ? (
+              <><Loader className="h-4 w-4 animate-spin" />Generating your roadmap…</>
+            ) : (
+              <><Brain className="h-4 w-4" />Generate Roadmap<ArrowRight className="h-4 w-4" /></>
+            )}
+          </button>
+        </form>
 
-        <button
-          type="submit"
-          disabled={loading}
-          className={`w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition-colors ${
-            loading ? 'opacity-50 cursor-not-allowed' : ''
-          }`}
-        >
-          {loading ? (
-            <>
-              <Loader className="h-5 w-5 animate-spin" />
-              Generating Roadmap...
-            </>
-          ) : (
-            <>
-              <Brain className="h-5 w-5" />
-              Generate Roadmap
-            </>
-          )}
-        </button>
-      </form>
+        {loading && (
+          <div className="rounded-2xl bg-sage/60 border border-sage px-5 py-4 text-sm text-slate-600">
+            <p className="font-medium text-midnight mb-1">⏳ AI is building your roadmap…</p>
+            <p>This usually takes 30–60 seconds. Hang tight while we curate your personalised path.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
