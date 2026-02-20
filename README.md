@@ -76,12 +76,11 @@ GROQ_API_KEY=your_groq_api_key
 GOOGLE_API_KEY=your_google_api_key
 CX_ID=your_google_cx_id
 YOUTUBE_API_KEY=your_youtube_api_key
-JSEARCH_API_KEY=your_jsearch_api_key (optional)
 ```
 
 5. Run the backend server:
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload 
 ```
 
 Backend will be available at: `http://localhost:8000`
@@ -98,13 +97,7 @@ cd frontend
 npm install
 ```
 
-3. Create `.env` file in `frontend/` directory:
-```
-VITE_SUPABASE_URL=your_supabase_url
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-```
-
-4. Start development server:
+3. Start development server:
 ```bash
 npm run dev
 ```
