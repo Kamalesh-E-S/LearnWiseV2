@@ -14,6 +14,7 @@ import { NodeInfo } from './NodeInfo';
 import { ZoomIn, ZoomOut, Maximize2, Trophy, Loader, X, Save } from 'lucide-react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import api from '../lib/axios';
+import Quiz from './Quiz';
 
 const nodeTypes = {
   custom: RoadmapNode
@@ -47,6 +48,8 @@ export function RoadmapViewer() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const currentRoadmap = useRoadmapStore((state) => state.currentRoadmap);
   const setCurrentRoadmap = useRoadmapStore((state) => state.setCurrentRoadmap);
+  const showQuizFor = useRoadmapStore((s) => s.showQuizFor);
+  const setShowQuizFor = useRoadmapStore((s) => s.setShowQuizFor);
 
   useEffect(() => {
     if (currentRoadmap) {
@@ -147,9 +150,52 @@ useEffect(() => {
       
       // Toggle the node's completion status
       const isCurrentlyCompleted = currentMarkedNodes.includes(nodeId);
-      const newMarkedNodes = isCurrentlyCompleted 
+      let newMarkedNodes = isCurrentlyCompleted 
         ? currentMarkedNodes.filter(id => id !== nodeId)
         : [...currentMarkedNodes, nodeId];
+
+      // Build adjacency map from edges to determine descendants
+      const adj = {};
+      edges.forEach(e => {
+        if (!adj[e.source]) adj[e.source] = [];
+        adj[e.source].push(e.target);
+      });
+
+      const getDescendants = (startId) => {
+        const visited = new Set();
+        const stack = [startId];
+        const descendants = [];
+        while (stack.length) {
+          const cur = stack.pop();
+          const children = adj[cur] || [];
+          children.forEach(ch => {
+            if (!visited.has(ch)) {
+              visited.add(ch);
+              descendants.push(ch);
+              stack.push(ch);
+            }
+          });
+        }
+        return descendants;
+      };
+
+      // Auto-mark or unmark level-2 (time/day) nodes based on their descendants
+      const markedSet = new Set(newMarkedNodes);
+      // use the flow nodes (which include level) to find level-2 nodes
+      nodes.forEach(n => {
+        // treat as time/day node if varName length==2 (e.g., 'a4','a6') or level===2
+        const nVar = n?.data?.varName || '';
+        const isTimeNode = (typeof nVar === 'string' && nVar.length === 2) || n?.data?.level === 2;
+        if (isTimeNode) {
+          const desc = getDescendants(n.id).filter(d => d !== n.id);
+          if (desc.length === 0) return; // nothing to base on
+          const allDone = desc.every(d => markedSet.has(d));
+          if (allDone) markedSet.add(n.id);
+          else markedSet.delete(n.id);
+        }
+      });
+
+      newMarkedNodes = Array.from(markedSet);
       
       // Calculate completion percentage
       const totalNodes = currentRoadmap.nodes.length;
@@ -164,7 +210,7 @@ useEffect(() => {
         ...currentRoadmap,
         nodes: currentRoadmap.nodes.map(node => ({
           ...node,
-          completed: node.id === nodeId ? !isCurrentlyCompleted : node.completed
+          completed: newMarkedNodes.includes(node.id)
         })),
         marked_nodes: newMarkedNodes,
         is_completed: isCompleted
@@ -385,6 +431,32 @@ useEffect(() => {
               onClose={() => setSelectedNode(null)}
             />
           </div>
+        )}
+        {showQuizFor && (
+          (() => {
+            // find node object in current flow nodes
+            const nodeObj = nodes.find(n => n.id === showQuizFor) || null;
+            return nodeObj ? (
+              <Quiz
+                roadmapId={currentRoadmap?.id}
+                node={nodeObj}
+                onClose={() => setShowQuizFor(null)}
+                onSuccess={async (res) => {
+                  // if passed, mark node complete using local handler so auto-marking runs
+                  if (res?.passed) {
+                    try {
+                      const already = currentRoadmap?.marked_nodes?.includes(nodeObj.id);
+                      if (!already) await handleNodeComplete(nodeObj.id);
+                    } catch (err) {
+                      console.error('Failed to mark node complete after quiz pass', err);
+                    }
+                  }
+                  // signal NodeInfo (and other listeners) to refresh attempts/best score
+                  useRoadmapStore.getState().bumpQuizRefresh();
+                }}
+              />
+            ) : null;
+          })()
         )}
       </div>
 

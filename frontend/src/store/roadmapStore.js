@@ -76,6 +76,11 @@ const useRoadmapStore = create(
       currentRoadmap: dummyRoadmaps[0],
       setRoadmaps: (roadmaps) => set({ roadmaps: roadmaps || [] }),
       setCurrentRoadmap: (roadmap) => set({ currentRoadmap: roadmap || null }),
+      showQuizFor: null,
+      setShowQuizFor: (nodeId) => set({ showQuizFor: nodeId }),
+      // counter to signal quiz-related refreshes (e.g., attempts/best score)
+      quizRefreshKey: 0,
+      bumpQuizRefresh: () => set((s) => ({ quizRefreshKey: (s.quizRefreshKey || 0) + 1 })),
       updateProgress: (nodeId, completed) => 
         set((state) => {
           if (!state.currentRoadmap?.nodes) return state;

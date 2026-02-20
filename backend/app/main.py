@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware # type: ignore
 
 from app.auth.routes import router as auth_router
 from app.routes.roadmap import router as roadmap_router
+from app.routes.quizzes import router as quizzes_router
 from app.database import Base, engine
 
 # Initialize DB tables
@@ -23,6 +24,7 @@ app.add_middleware(
 # Include routers
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(roadmap_router, prefix="/api/roadmap")
+app.include_router(quizzes_router, prefix="/api/quizzes")
 
 # Health Check
 @app.get("/")

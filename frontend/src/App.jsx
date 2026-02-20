@@ -7,6 +7,7 @@ import { OngoingRoadmaps } from './components/OngoingRoadmaps';
 import { useAuthStore } from './store/authStore';
 import { useRoadmapStore } from './store/roadmapStore';
 import { CompletedRoadmaps } from './components/CompletedRoadmaps';
+import { Jobs } from './components/Jobs';
 
 function Layout({ children }) {
 const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -37,6 +38,12 @@ const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
                     className="text-sm text-gray-600 hover:text-gray-900"
                   >
                     Completed
+                  </Link>
+                  <Link
+                    to="/jobs"
+                    className="text-sm text-gray-600 hover:text-gray-900"
+                  >
+                    Jobs
                   </Link>
                   <Link
                     to="/create"
@@ -148,6 +155,16 @@ function App() {
             <ProtectedRoute>
               <Layout>
                 <RoadmapForm />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/jobs"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <Jobs />
               </Layout>
             </ProtectedRoute>
           }

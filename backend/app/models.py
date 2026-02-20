@@ -60,3 +60,35 @@ class ComprehensiveRoadmap(Base):
 
     # Relationship to User model
     user = relationship("User", backref="roadmaps")
+
+
+class QuizAttempt(Base):
+    __tablename__ = "quiz_attempts"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    roadmap_id = Column(Integer, ForeignKey("comprehensive_roadmaps.id"))
+    node_id = Column(String)
+    attempts = Column(Integer, default=0)
+    best_score = Column(Integer, nullable=True)
+    best_total = Column(Integer, nullable=True)
+    passed = Column(Boolean, default=False)
+    quiz_json = Column(JSON, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", backref="quiz_attempts")
+    roadmap = relationship("ComprehensiveRoadmap", backref="quiz_attempts")
+
+
+class QuizTemplate(Base):
+    __tablename__ = "quiz_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    roadmap_id = Column(Integer, ForeignKey("comprehensive_roadmaps.id"))
+    node_id = Column(String)
+    quiz_json = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", backref="quiz_templates")
+    roadmap = relationship("ComprehensiveRoadmap", backref="quiz_templates")

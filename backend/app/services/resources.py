@@ -9,19 +9,28 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 CX_ID = os.getenv("CX_ID")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
+# new keys
+# GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+# CX_ID = os.getenv("CX_ID")
+# YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+
 def get_website_links(query):
     """Fetches 2 website links from Google Custom Search API."""
-    url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={GOOGLE_API_KEY}&cx={CX_ID}"
+    url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={GOOGLE_API_KEY}&cx={CX_ID}&num=2"
     response = requests.get(url).json()
-    return [item["link"] for item in response.get("items", [])[:2]]  # Get top 2 links
+    return [item["link"] for item in response.get("items", [])]  # Get top 2 links
     # return []
 
 def get_video_links(query):
     """Fetches 2 YouTube video links using YouTube Data API."""
-    url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&q={query}&type=video&maxResults=2&key={YOUTUBE_API_KEY}"
+    url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&q={query}&type=video&maxResults=2&key={YOUTUBE_API_KEY}&num=2"
     response = requests.get(url).json()
-    return [f"https://www.youtube.com/watch?v={item['id']['videoId']}" for item in response.get("items", [])]
-    #  return []
+    videos = []
+    for item in response.get("items", []):
+        video_id = item.get("id", {}).get("videoId")
+        if video_id:
+            videos.append(f"https://www.youtube.com/watch?v={video_id}")
+    return videos
 def get_links_for_topics(topics):
     """Fetches website and video links for a list of topics."""
     results = {}

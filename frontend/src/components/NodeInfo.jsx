@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { X, AlertCircle } from 'lucide-react';
 import { useRoadmapStore } from '../store/roadmapStore';
+import Quiz from './Quiz';
+import api from '../lib/axios';
 
 // const parseDescription = (description) => {
 //   if (!description || typeof description !== 'string') {
@@ -106,6 +108,9 @@ const parseDescription = (description) => {
 
 export function NodeInfo({ node, onComplete, onClose }) {
   const currentRoadmap = useRoadmapStore((state) => state.currentRoadmap);
+  const setShowQuizFor = useRoadmapStore((s) => s.setShowQuizFor);
+  const quizRefreshKey = useRoadmapStore((s) => s.quizRefreshKey);
+  const [attemptsInfo, setAttemptsInfo] = useState({ attempts: 0, best_score: null, best_total: null, passed: false });
 
   if (!node?.data) {
     return (
@@ -138,6 +143,36 @@ export function NodeInfo({ node, onComplete, onClose }) {
   const { text, ytLinks, siteLinks } = parseDescription(nodeDescription);
   console.log('Parsed result:', { text, ytLinks, siteLinks });
 
+  // Determine if this node is a "day" time node.
+  // Use varName length === 2 (e.g., 'a4', 'b6') as primary heuristic for level-2/time nodes,
+  // fall back to level === 2 and label patterns if varName unavailable.
+  const varName = node?.data?.varName || '';
+  const isVarNameTime = typeof varName === 'string' && varName.length === 2;
+  const isLabelDay = /^day\s*\d+/i.test(node.data.label || '') || /^\d+$/.test((node.data.label || '').trim());
+  const isDayNode = isVarNameTime || (node?.data?.level === 2 && isLabelDay);
+
+  // fetch attempts info when NodeInfo mounts
+  React.useEffect(() => {
+    let mounted = true;
+    async function loadAttempts() {
+      try {
+        const roadmapId = currentRoadmap?.id;
+        // prefer varName as node identifier (matches how quizzes are generated)
+        const nodeId = node?.data?.varName || node?.id;
+        if (!roadmapId || !nodeId) return;
+        const res = await api.get('/quizzes/attempts', { params: { roadmap_id: roadmapId, node_id: nodeId } });
+        if (mounted && res.data && res.data.success) {
+          setAttemptsInfo(res.data.data || {});
+        }
+      } catch (e) {
+        console.error('Failed to load attempts', e);
+      }
+    }
+
+    loadAttempts();
+    return () => { mounted = false; };
+  }, [currentRoadmap?.id, node, currentRoadmap?.marked_nodes, quizRefreshKey]);
+
   return (
     <div className="fixed inset-y-0 right-0 w-96 bg-white shadow-xl z-40 transform transition-transform">
       <div className="p-4 border-b flex justify-between items-center">
@@ -168,7 +203,24 @@ export function NodeInfo({ node, onComplete, onClose }) {
                 ${node.data.completed ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
                 {node.data.completed ? 'Completed' : 'In Progress'}
               </p>
-              <button
+              <div className="flex items-center gap-3">
+                {!isDayNode && (
+                  <>
+                <button
+                  onClick={() => setShowQuizFor(node.data.varName)}
+                  className="ml-3 px-3 py-1 rounded text-sm font-medium bg-blue-100 text-blue-700 hover:bg-blue-200"
+                >
+                  Take Quiz
+                </button>
+                
+                <div className="text-xs text-gray-600">
+                  <div>Attempts: {attemptsInfo.attempts}</div>
+                  <div>Best: {attemptsInfo.best_score !== null ? `${attemptsInfo.best_score}/${attemptsInfo.best_total}` : 'N/A'}</div>
+                </div>
+              </>
+                )}
+              </div>
+              {/* <button
                 onClick={() => onComplete(node.data.id)}
                 className={`px-3 py-1 rounded text-sm font-medium transition-colors
                   ${node.data.completed 
@@ -176,7 +228,7 @@ export function NodeInfo({ node, onComplete, onClose }) {
                     : 'bg-green-100 text-green-700 hover:bg-green-200'}`}
               >
                 {node.data.completed ? 'Mark Incomplete' : 'Mark Complete'}
-              </button>
+              </button> */}
             </div>
           </div>
           
@@ -229,6 +281,7 @@ export function NodeInfo({ node, onComplete, onClose }) {
           </div>
         </div>
       </div>
+      {/* Quiz modal rendered at top-level via store in RoadmapViewer */}
     </div>
   );
 }

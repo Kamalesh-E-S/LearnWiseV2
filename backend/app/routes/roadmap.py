@@ -9,6 +9,7 @@ from app.models import ComprehensiveRoadmap
 from app.auth.routes import get_current_user, oauth2_scheme
 from app.services.llm import llm_service
 from app.services.resources import get_website_links, get_video_links
+from app.services.jobs import jobs_service
 
 router = APIRouter()
 
@@ -471,4 +472,57 @@ async def update_roadmap_progress(
     except Exception as e:
         print(f"Error updating roadmap: {str(e)}")
         db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/jobs/recommendations")
+async def get_job_recommendations(
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get job recommendations based on completed roadmaps.
+    Fetches jobs from Naukri-like sources based on learned skills.
+    """
+    try:
+        # Get completed roadmaps for the user
+        completed_roadmaps = db.query(ComprehensiveRoadmap).filter(
+            ComprehensiveRoadmap.user_id == current_user.id,
+            ComprehensiveRoadmap.is_completed == True
+        ).all()
+        
+        if not completed_roadmaps:
+            return {
+                "success": True,
+                "jobs": [],
+                "completed_skills": [],
+                "message": "No completed roadmaps found. Complete a roadmap to get job recommendations."
+            }
+        
+        # Extract skills from completed roadmaps
+        skills = []
+        for roadmap in completed_roadmaps:
+            skills.append(roadmap.skill)
+        
+        # Fetch job recommendations from Naukri service
+        job_response = await jobs_service.fetch_jobs_from_naukri(
+            skills=skills,
+            num_jobs=6
+        )
+        
+        if not job_response["success"]:
+            raise HTTPException(status_code=500, detail=job_response.get("error", "Failed to fetch jobs"))
+        
+        # Extract jobs from response
+        jobs = job_response["data"].get("jobs", [])
+        
+        return {
+            "success": True,
+            "jobs": jobs,
+            "completed_skills": skills
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in get_job_recommendations: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

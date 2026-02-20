@@ -2,10 +2,12 @@ import { memo, useState, useEffect } from 'react';
 import { Handle, Position } from 'reactflow';
 import { CheckSquare, Square, AlertCircle } from 'lucide-react';
 import { useRoadmapStore } from '../store/roadmapStore';
+import api from '../lib/axios';
 
 const RoadmapNode = memo(({ id, data }) => {
   const updateProgress = useRoadmapStore(state => state.updateProgress);
   const currentRoadmap = useRoadmapStore(state => state.currentRoadmap);
+  const setShowQuizFor = useRoadmapStore(state => state.setShowQuizFor);
   const [isCompleted, setIsCompleted] = useState(data?.completed || false);
   
   // Sync local state with prop updates and marked_nodes
@@ -25,12 +27,46 @@ const RoadmapNode = memo(({ id, data }) => {
     );
   }
 
-  const handleClick = (e) => {
+  const handleClick = async (e) => {
     e.stopPropagation(); // Prevent node selection when clicking checkbox
-    
-    // Update the global state
-    if (id) {
-      updateProgress(id, !isCompleted);
+
+    if (!id) return;
+
+    // If node already completed, allow unchecking
+    if (isCompleted) {
+      updateProgress(id, false);
+      return;
+    }
+
+    // If this is a time/day node (varName length === 2), allow marking without a quiz
+    const isTimeNode = typeof id === 'string' && id.length === 2;
+    if (isTimeNode) {
+      updateProgress(id, true);
+      return;
+    }
+
+    // Check backend if user has already passed quiz for this node
+    try {
+      const roadmapId = currentRoadmap?.id;
+      if (!roadmapId) {
+        setShowQuizFor(id);
+        return;
+      }
+
+      const res = await api.get('/quizzes/attempts', { params: { roadmap_id: roadmapId, node_id: id } });
+      if (res.data && res.data.success) {
+        const { passed } = res.data.data || {};
+        if (passed) {
+          updateProgress(id, true);
+        } else {
+          setShowQuizFor(id);
+        }
+      } else {
+        setShowQuizFor(id);
+      }
+    } catch (err) {
+      console.error('Error checking quiz attempts', err);
+      setShowQuizFor(id);
     }
   };
 
